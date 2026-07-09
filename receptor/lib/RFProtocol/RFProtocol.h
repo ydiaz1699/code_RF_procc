@@ -37,9 +37,12 @@ private:
   // ─── Filtro de repeticiones RCSwitch ───
   uint32_t _lastValue = 0;
   // Ventana de deduplicación para repeticiones del mismo código.
-  // RCSwitch con nRepeatTransmit=10 y protocolo 1 envía cada código en ~30ms total,
-  // pero entre repeticiones pasan solo ~2-3ms. Usamos 50ms como margen seguro.
-  static const unsigned long DEDUPE_MS = 50;
+  // Con protocolo 1 de RCSwitch (pulseLength=350µs, 24 bits):
+  //   Un código tarda ~44.8ms × 2 reps = ~90ms para ser reportado.
+  //   Si por algún motivo se re-reporta, será ~90ms después.
+  //   120ms cubre ese caso sin bloquear el siguiente código de la trama
+  //   (que llega ~170ms después con CODE_GAP_MS=80ms).
+  static const unsigned long DEDUPE_MS = 120;
 
   bool _packetReady = false;
   Packet _readyPacket{};

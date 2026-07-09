@@ -5,7 +5,6 @@ RFProtocolRx::RFProtocolRx(uint8_t interruptPin) : _interruptPin(interruptPin) {
 
 void RFProtocolRx::begin() {
   // enableReceive() espera el NÚMERO DE INTERRUPCIÓN, no el pin.
-  // En Arduino Uno: pin D2 = interrupción 0, pin D3 = interrupción 1.
   // digitalPinToInterrupt() hace la conversión correcta en cualquier placa.
   _rc.enableReceive(digitalPinToInterrupt(_interruptPin));
 }
@@ -32,16 +31,25 @@ void RFProtocolRx::update() {
   uint32_t code = _rc.getReceivedValue();
   _rc.resetAvailable();
 
-  if (code == 0) return;  // RCSwitch a veces reporta 0 con ruido/timeout, se ignora
+  if (code == 0) return;
 
   // ─── Filtro de repeticiones de RCSwitch ───
-  // RCSwitch retransmite cada código varias veces (nRepeatTransmit, default=10).
-  // El receptor las entrega todas como si fueran códigos nuevos.
-  // Aquí descartamos repeticiones del MISMO código que llegan en ráfaga.
+  // Con setRepeatTransmit(2) en el TX, RCSwitch reporta cada código
+  // exactamente UNA vez (necesita 2 repeticiones para validar = 1 reporte).
+  // Pero por seguridad, si llega el MISMO código dentro de la ventana
+  // de deduplicación, lo descartamos.
+  //
+  // Timing con protocolo 1 (pulseLength=350µs):
+  //   Un código completo = 24bits × 1400µs + sync 11200µs = 44.8ms
+  //   Con setRepeatTransmit(2): rc.send() tarda 2 × 44.8ms = ~90ms
+  //   Entre reportes del MISMO código: ~90ms (si hubiera más de 2 reps)
+  //
+  // DEDUPE_MS=120ms: filtra cualquier re-reporte del mismo código,
+  // pero NO filtra el siguiente código de la trama (que llega ~170ms
+  // después = 90ms de rc.send() + 80ms de CODE_GAP_MS).
   unsigned long now = millis();
   if (code == _lastValue && (now - _lastCodeMs) < DEDUPE_MS) {
-    // Es una repetición del mismo código dentro de la ventana → ignorar
-    _lastCodeMs = now;  // actualizar timestamp para extender la ventana
+    _lastCodeMs = now;
     return;
   }
   _lastValue = code;
@@ -63,12 +71,10 @@ void RFProtocolRx::handleCode(uint32_t code) {
         _building.type = b2;
         _state = RX_WAIT_HEADER2;
       }
-      // si no es SYNC, se ignora el código (ruido o quedamos desincronizados)
       break;
 
     case RX_WAIT_HEADER2:
       if (b0 > MAX_PAYLOAD) {
-        // longitud inválida: probablemente ruido, se descarta la trama
         _state = RX_WAIT_SYNC;
         break;
       }
@@ -101,6 +107,5 @@ void RFProtocolRx::finalizePacket() {
     _readyPacket = _building;
     _packetReady = true;
   }
-  // si el CRC no coincide, se descarta silenciosamente y se vuelve a esperar SYNC
   _state = RX_WAIT_SYNC;
 }
