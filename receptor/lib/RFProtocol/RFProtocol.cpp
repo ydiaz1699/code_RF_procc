@@ -4,7 +4,10 @@
 RFProtocolRx::RFProtocolRx(uint8_t interruptPin) : _interruptPin(interruptPin) {}
 
 void RFProtocolRx::begin() {
-  _rc.enableReceive(_interruptPin);
+  // enableReceive() espera el NÚMERO DE INTERRUPCIÓN, no el pin.
+  // En Arduino Uno: pin D2 = interrupción 0, pin D3 = interrupción 1.
+  // digitalPinToInterrupt() hace la conversión correcta en cualquier placa.
+  _rc.enableReceive(digitalPinToInterrupt(_interruptPin));
 }
 
 bool RFProtocolRx::available() const {
