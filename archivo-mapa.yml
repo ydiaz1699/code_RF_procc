@@ -1,0 +1,143 @@
+# archivo-mapa.yml — Mapa completo del proyecto
+# Generado automáticamente — No editar manualmente
+
+metadata:
+  nombre: "code_RF_procc"
+  version: "1.0.0"
+  autor: "ydiaz1699"
+  fecha_creacion: "2025-07-09"
+  ultima_actualizacion: "2025-07-09"
+  plataforma: "PlatformIO"
+
+objetivo: "Comunicación RF 433MHz punto-a-punto con protocolo empaquetado: Nano (TX, deep-sleep) → Uno (RX)"
+
+hardware:
+  transmisor:
+    placa:
+      nombre: "Arduino Nano"
+      mcu: "ATmega328P"
+      catalog_id: "arduino-nano"
+    perifericos:
+      - nombre: "Módulo TX 433MHz (FS1000A)"
+        protocolo: "GPIO"
+        pines:
+          - funcion: "DATA"
+            gpio: 10
+          - funcion: "VCC"
+            gpio: null  # 5V rail
+      - nombre: "Pulsador NO"
+        protocolo: "GPIO"
+        pines:
+          - funcion: "SIGNAL (wake)"
+            gpio: 2
+
+  receptor:
+    placa:
+      nombre: "Arduino Uno R3"
+      mcu: "ATmega328P"
+      catalog_id: "arduino-uno"
+    perifericos:
+      - nombre: "Módulo RX 433MHz (MX-RM-5V)"
+        protocolo: "GPIO (interrupt)"
+        pines:
+          - funcion: "DATA"
+            gpio: 2
+
+dependencias:
+  - nombre: "sui77/rc-switch"
+    version: "2.6.4"
+    proposito: "Envío/recepción de códigos 433MHz ASK/OOK 24-bit"
+
+arquitectura:
+  patron: "FSM (máquinas de estado independientes TX y RX)"
+  modulos:
+    - nombre: "RFProtocolTx"
+      archivo: "transmisor/lib/RFProtocol/RFProtocol.cpp"
+      responsabilidad: "Fragmentar Packet en códigos RCSwitch 24-bit"
+    - nombre: "RFProtocolRx"
+      archivo: "receptor/lib/RFProtocol/RFProtocol.cpp"
+      responsabilidad: "Re-ensamblar códigos 24-bit en Packet con CRC"
+    - nombre: "AppFSM (TX)"
+      archivo: "transmisor/src/main.cpp"
+      responsabilidad: "Ciclo sleep→wake→build→transmit→release"
+    - nombre: "MainLoop (RX)"
+      archivo: "receptor/src/main.cpp"
+      responsabilidad: "Polling rf.update() + dedup por seq"
+  fsm_tx:
+    - estado: "ST_SLEEP"
+      transicion_a: "ST_WAKE"
+      condicion: "Interrupción INT0 (botón FALLING)"
+    - estado: "ST_WAKE"
+      transicion_a: "ST_BUILD_PACKET"
+      condicion: "Botón confirmado LOW tras 30ms"
+    - estado: "ST_BUILD_PACKET"
+      transicion_a: "ST_TRANSMIT"
+      condicion: "Inmediato"
+    - estado: "ST_TRANSMIT"
+      transicion_a: "ST_WAIT_RELEASE"
+      condicion: "sendPacket() retorna"
+    - estado: "ST_WAIT_RELEASE"
+      transicion_a: "ST_SLEEP"
+      condicion: "Botón HIGH + 250ms debounce"
+  fsm_rx:
+    - estado: "RX_WAIT_SYNC"
+      transicion_a: "RX_WAIT_HEADER2"
+      condicion: "byte0 == 0xAA"
+    - estado: "RX_WAIT_HEADER2"
+      transicion_a: "RX_WAIT_PAYLOAD"
+      condicion: "len <= 16 y len > 0"
+    - estado: "RX_WAIT_PAYLOAD"
+      transicion_a: "RX_WAIT_SYNC"
+      condicion: "payloadIdx >= len (finalizePacket)"
+
+flujos:
+  boot_tx:
+    - "Serial.begin(9600)"
+    - "pinMode(BUTTON_PIN, INPUT_PULLUP)"
+    - "rf.begin() → enableTransmit(D10) + setRepeatTransmit(3)"
+    - "Entra en ST_SLEEP (PWR_DOWN)"
+  boot_rx:
+    - "Serial.begin(9600)"
+    - "rf.begin() → enableReceive(digitalPinToInterrupt(2))"
+    - "Imprime 'Receptor listo'"
+    - "Entra en loop infinito con rf.update()"
+  transmision:
+    - "Botón presionado → INT0 despierta MCU"
+    - "30ms estabilización → confirma botón LOW"
+    - "Construye Packet(seq, TYPE_BUTTON_EVENT, 'ON')"
+    - "sendPacket(): 3 códigos × rc.send(code,24) + delay(150ms)"
+    - "Repite trama 3 veces con gap de 300ms"
+    - "Espera soltar botón + 250ms debounce"
+    - "Vuelve a PWR_DOWN"
+
+limitaciones:
+  - "Unidireccional: sin ACK, TX no sabe si RX recibió"
+  - "Payload máximo: 16 bytes por paquete"
+  - "Sin cifrado: cualquier receptor 433MHz puede leer los datos"
+  - "Throughput: ~1 paquete/segundo máximo"
+  - "RAM: 2KB total, ~200 bytes usados por buffers del protocolo"
+
+estructura:
+  - path: "transmisor/src/"
+    proposito: "Código fuente TX (FSM de aplicación)"
+  - path: "transmisor/lib/RFProtocol/"
+    proposito: "Librería protocolo TX (fragmentación)"
+  - path: "receptor/src/"
+    proposito: "Código fuente RX (loop principal)"
+  - path: "receptor/lib/RFProtocol/"
+    proposito: "Librería protocolo RX (re-ensamblado)"
+  - path: ".ai/"
+    proposito: "Documentación técnica para asistentes IA"
+  - path: "docs/"
+    proposito: "Documentación visual y notas de hardware"
+  - path: "test4-7_*/"
+    proposito: "Tests de diagnóstico incrementales (referencia)"
+
+comandos:
+  compilar_tx: "cd transmisor && pio run"
+  compilar_rx: "cd receptor && pio run"
+  upload_tx: "cd transmisor && pio run --target upload"
+  upload_rx: "cd receptor && pio run --target upload"
+  monitor_tx: "cd transmisor && pio device monitor --baud 9600"
+  monitor_rx: "cd receptor && pio device monitor --baud 9600"
+  clean: "cd transmisor && pio run --target clean && cd ../receptor && pio run --target clean"
