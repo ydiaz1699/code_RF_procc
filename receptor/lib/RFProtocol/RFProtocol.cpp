@@ -34,19 +34,9 @@ void RFProtocolRx::update() {
   if (code == 0) return;
 
   // ─── Filtro de repeticiones de RCSwitch ───
-  // Con setRepeatTransmit(2) en el TX, RCSwitch reporta cada código
-  // exactamente UNA vez (necesita 2 repeticiones para validar = 1 reporte).
-  // Pero por seguridad, si llega el MISMO código dentro de la ventana
-  // de deduplicación, lo descartamos.
-  //
-  // Timing con protocolo 1 (pulseLength=350µs):
-  //   Un código completo = 24bits × 1400µs + sync 11200µs = 44.8ms
-  //   Con setRepeatTransmit(2): rc.send() tarda 2 × 44.8ms = ~90ms
-  //   Entre reportes del MISMO código: ~90ms (si hubiera más de 2 reps)
-  //
-  // DEDUPE_MS=120ms: filtra cualquier re-reporte del mismo código,
-  // pero NO filtra el siguiente código de la trama (que llega ~170ms
-  // después = 90ms de rc.send() + 80ms de CODE_GAP_MS).
+  // Con setRepeatTransmit(3), el RX reporta el código 1 vez por transmisión.
+  // Si por algún motivo llega un re-reporte del mismo código en <200ms, se descarta.
+  // El siguiente código DIFERENTE de la trama llega a ~286ms (> DEDUPE_MS), así que pasa.
   unsigned long now = millis();
   if (code == _lastValue && (now - _lastCodeMs) < DEDUPE_MS) {
     _lastCodeMs = now;
