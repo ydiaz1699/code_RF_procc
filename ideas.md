@@ -97,30 +97,44 @@ Es un sistema transmisor/receptor RF a 433MHz basado en **RCSwitch**, con un pro
 ---
 ---
 
-¿Es fiable compartir la librería entre dos Arduinos distintos?
-Sí, totalmente. Es un malentendido común: compartir código fuente en tiempo de compilación no crea ningún acoplamiento en tiempo de ejecución. Cada placa (Uno y Nano) sigue compilando su propio binario independiente — el receptor no "llama" al transmisor ni viceversa. Lo único que compartes es el texto de packet.h, crc8.h, RFProtocol.h/cpp, que se copia/incluye en cada compilación por separado.
+## ¿Es fiable compartir la librería entre dos Arduinos distintos?
+
+Sí, totalmente. Es un malentendido común: **compartir código fuente en tiempo de compilación no crea ningún acoplamiento en tiempo de ejecución**. Cada placa (Uno y Nano) sigue compilando su propio binario independiente — el receptor no "llama" al transmisor ni viceversa. Lo único que compartes es el *texto* de `packet.h`, `crc8.h`, `RFProtocol.h/cpp`, que se copia/incluye en cada compilación por separado.
+
 De hecho, PlatformIO está pensado justo para esto. Dos formas simples:
-Opción A — lib_extra_dirs (más simple, mismo repo)
-Mover la carpeta a una ubicación común, por ejemplo common/RFProtocol/, y en cada platformio.ini:
-inilib_extra_dirs = ../common
+
+**Opción A — `lib_extra_dirs` (más simple, mismo repo)**
+Mover la carpeta a una ubicación común, por ejemplo `common/RFProtocol/`, y en cada `platformio.ini`:
+```ini
+lib_extra_dirs = ../common
+```
 Así ambos proyectos compilan contra los mismos archivos físicos — cero duplicación, cero riesgo de divergencia.
-Opción B — Librería como submódulo git
-Si en algún momento quieres versionarla aparte (por ejemplo reusarla en un tercer proyecto), la conviertes en su propio repo y la referencias con lib_deps = https://github.com/tuusuario/RFProtocol.git. Más overhead, mejor si el protocolo va a evolucionar independientemente de estos dos proyectos.
+
+**Opción B — Librería como submódulo git**
+Si en algún momento quieres versionarla aparte (por ejemplo reusarla en un tercer proyecto), la conviertes en su propio repo y la referencias con `lib_deps = https://github.com/tuusuario/RFProtocol.git`. Más overhead, mejor si el protocolo va a evolucionar independientemente de estos dos proyectos.
+
 Para tu caso (dos carpetas en el mismo repo), la Opción A es la que te conviene: mínimo cambio, máxima garantía de que TX y RX siempre hablan el mismo protocolo.
 
-Rediseño del filtro de deduplicación
-Problema del diseño actual
-cppstatic const unsigned long DEDUPE_MS = 200;
+---
+
+## Rediseño del filtro de deduplicación
+
+### Problema del diseño actual
+```cpp
+static const unsigned long DEDUPE_MS = 200;
 if (code == _lastValue && (now - _lastCodeMs) < DEDUPE_MS) { ... }
+```
 Esto depende de que el intervalo entre repeticiones (~135ms) y el intervalo entre códigos distintos (~286ms) queden bien separados por una ventana de 200ms elegida a mano. Es frágil porque:
+- Si cambia `CODE_GAP_MS` en el TX, hay que recalcular `DEDUPE_MS` en el RX.
+- Jitter de RF (interferencia, timing del microcontrolador) puede acercar ambos valores y romper la separación.
+- No distingue "repetición del mismo código dentro de la trama" de "casualidad: dos códigos distintos que dan el mismo valor de 24 bits" (no imposible, aunque raro).
 
-Si cambia CODE_GAP_MS en el TX, hay que recalcular DEDUPE_MS en el RX.
-Jitter de RF (interferencia, timing del microcontrolador) puede acercar ambos valores y romper la separación.
-No distingue "repetición del mismo código dentro de la trama" de "casualidad: dos códigos distintos que dan el mismo valor de 24 bits" (no imposible, aunque raro).
+### Diseño más robusto: deduplicar por posición en la trama, no por tiempo
 
-Diseño más robusto: deduplicar por posición en la trama, no por tiempo
-La idea clave: ya sabes en qué estado de la máquina estás (RX_WAIT_SYNC, RX_WAIT_HEADER2, RX_WAIT_PAYLOAD). Un código repetido de RCSwitch para la misma posición de trama debería, en teoría, generar el mismo code que el que ya procesaste para ese estado. Puedes usar eso en vez de un temporizador arbitrario:
-cppclass RFProtocolRx {
+La idea clave: **ya sabes en qué estado de la máquina estás** (`RX_WAIT_SYNC`, `RX_WAIT_HEADER2`, `RX_WAIT_PAYLOAD`). Un código repetido de RCSwitch para la misma posición de trama debería, en teoría, generar el mismo `code` que el que ya procesaste para ese estado. Puedes usar eso en vez de un temporizador arbitrario:
+
+```cpp
+class RFProtocolRx {
   ...
 private:
   enum RxState { RX_WAIT_SYNC, RX_WAIT_HEADER2, RX_WAIT_PAYLOAD };
@@ -157,17 +171,22 @@ void RFProtocolRx::update() {
   handleCode(code);  // al cambiar de estado dentro de handleCode,
                       // resetear _hasAcceptedInState = false para el nuevo estado
 }
-Y dentro de handleCode, cada transición de estado (RX_WAIT_SYNC → RX_WAIT_HEADER2, etc.) debe resetear _hasAcceptedInState = false, porque ahora esperas un código distinto (el siguiente en la trama), y su repetición debe volver a filtrarse desde cero.
-Por qué es más robusto
+```
 
-No depende de constantes de tiempo ajustadas a mano. Ya no importa si el gap real es 135ms, 200ms o 400ms — el filtro compara contenido, no tiempo.
-Se adapta automáticamente si cambias PACKET_REPEATS o CODE_GAP_MS en el transmisor sin tocar el receptor.
-Sigue usando el timeout de trama (RX_TIMEOUT_MS) como red de seguridad, pero solo para abortar tramas colgadas, no para deduplicar.
-Reduce el caso borde de falsos negativos: con el diseño actual, si por ruido una repetición llega justo después de 200ms, no se filtra y corrompe el reensamblado; con este diseño, mientras el código siga siendo idéntico al último aceptado en ese estado, se sigue filtrando sin importar cuánto tiempo pase (hasta el timeout general).
+Y dentro de `handleCode`, cada transición de estado (`RX_WAIT_SYNC → RX_WAIT_HEADER2`, etc.) debe resetear `_hasAcceptedInState = false`, porque ahora esperas un código *distinto* (el siguiente en la trama), y su repetición debe volver a filtrarse desde cero.
 
-Alternativa complementaria (opcional, más simple)
-Si no quieres tocar la máquina de estados, una mejora más ligera es basar el filtro en un conteo de repeticiones esperado en vez de tiempo: como sabes que setRepeatTransmit(3) genera como máximo 3 reportes por código, puedes contar cuántos "iguales" llevas vistos y dejar de filtrar tras el 3º, en vez de fiarte de una ventana temporal:
-cppstatic const uint8_t MAX_REPEATS_EXPECTED = 3;
+### Por qué es más robusto
+
+1. **No depende de constantes de tiempo ajustadas a mano.** Ya no importa si el gap real es 135ms, 200ms o 400ms — el filtro compara *contenido*, no *tiempo*.
+2. **Se adapta automáticamente si cambias `PACKET_REPEATS` o `CODE_GAP_MS`** en el transmisor sin tocar el receptor.
+3. **Sigue usando el timeout de trama (`RX_TIMEOUT_MS`) como red de seguridad**, pero solo para abortar tramas colgadas, no para deduplicar.
+4. Reduce el caso borde de falsos negativos: con el diseño actual, si por ruido una repetición llega justo después de 200ms, no se filtra y corrompe el reensamblado; con este diseño, mientras el código siga siendo idéntico al último aceptado *en ese estado*, se sigue filtrando sin importar cuánto tiempo pase (hasta el timeout general).
+
+### Alternativa complementaria (opcional, más simple)
+Si no quieres tocar la máquina de estados, una mejora más ligera es basar el filtro en un **conteo de repeticiones esperado** en vez de tiempo: como sabes que `setRepeatTransmit(3)` genera como máximo 3 reportes por código, puedes contar cuántos "iguales" llevas vistos y dejar de filtrar tras el 3º, en vez de fiarte de una ventana temporal:
+
+```cpp
+static const uint8_t MAX_REPEATS_EXPECTED = 3;
 uint8_t _sameCodeCount = 0;
 ...
 if (code == _lastValue) {
@@ -178,4 +197,6 @@ if (code == _lastValue) {
   _lastValue = code;
   _sameCodeCount = 1;
 }
-Esto es más simple de implementar que el rediseño por estado, pero menos robusto (sigue sin usar contexto de la máquina de estados). El diseño por estado es el que te recomiendo si el proyecto va a seguir creciendo.
+```
+
+Esto es más simple de implementar que el rediseño por estado, pero menos robusto (sigue sin usar contexto de la máquina de estados). El diseño **por estado** es el que te recomiendo si el proyecto va a seguir creciendo.
