@@ -46,8 +46,10 @@ if (p.seq < lastSeq && lastSeq != 255) {
 Sumar un byte aleatorio (o incremental en EEPROM) generado en el `setup()` del transmisor, que cambia cada vez que arranca. Así el receptor compara ese ID y sabe con certeza que hubo un reinicio, sin depender de heurísticas sobre el `seq`.
 
 ¿Te sirve más la A (simple, sin tocar el protocolo) o preferís la B (más robusta, pero hay que agregar un campo)?
+
 ---
 ---
+
 # Análisis del proyecto `code_rf_procc`
 
 Es un sistema transmisor/receptor RF a 433MHz basado en **RCSwitch**, con un protocolo propio de paquetes (sync + seq + type + len + payload + CRC8) empaquetado en códigos de 24 bits. Arquitectura limpia, bien comentada y con máquinas de estado explícitas en ambos lados. Aquí el desglose:
