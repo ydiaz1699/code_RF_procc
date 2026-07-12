@@ -3,18 +3,20 @@
 
 namespace {
   const uint16_t REPEAT_GAP_MS = 300;  // separación entre repeticiones de trama completa
-  const uint16_t CODE_GAP_MS   = 150;  // separación entre códigos DENTRO de una trama
-                                       // DEBE ser > DEDUPE_MS del receptor (50ms) para que
-                                       // el receptor distinga un código nuevo de una repetición.
-                                       // Con RCSwitch default (10 repeticiones, protocolo 1) cada
-                                       // código tarda ~30-35ms en transmitirse completo, así que
-                                       // 150ms da margen suficiente.
+  const uint16_t CODE_GAP_MS   = 150;  // separación entre códigos DENTRO de una trama.
+                                       // Con setRepeatTransmit(3): rc.send() tarda ~135ms,
+                                       // + 150ms de gap = ~285ms entre códigos.
+                                       // Esto coincide con el dt=286-287ms medido en Test 5.
 }
 
 RFProtocolTx::RFProtocolTx(uint8_t txPin) : _txPin(txPin) {}
 
 void RFProtocolTx::begin() {
   _rc.enableTransmit(_txPin);
+  // 3 repeticiones: mínimo probado para recepción fiable con módulos 433MHz.
+  // Con 2 reps el RX no valida (RCSwitch necesita 2 gaps = 3 transmisiones).
+  // Con 10 (default) genera múltiples reportes que complican la decodificación.
+  _rc.setRepeatTransmit(3);
 }
 
 void RFProtocolTx::sendCode24(uint8_t b0, uint8_t b1, uint8_t b2) {

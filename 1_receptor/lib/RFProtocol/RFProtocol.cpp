@@ -4,7 +4,9 @@
 RFProtocolRx::RFProtocolRx(uint8_t interruptPin) : _interruptPin(interruptPin) {}
 
 void RFProtocolRx::begin() {
-  _rc.enableReceive(_interruptPin);
+  // enableReceive() espera el NÚMERO DE INTERRUPCIÓN, no el pin.
+  // digitalPinToInterrupt() hace la conversión correcta en cualquier placa.
+  _rc.enableReceive(digitalPinToInterrupt(_interruptPin));
 }
 
 bool RFProtocolRx::available() const {
@@ -29,16 +31,15 @@ void RFProtocolRx::update() {
   uint32_t code = _rc.getReceivedValue();
   _rc.resetAvailable();
 
-  if (code == 0) return;  // RCSwitch a veces reporta 0 con ruido/timeout, se ignora
+  if (code == 0) return;
 
   // ─── Filtro de repeticiones de RCSwitch ───
-  // RCSwitch retransmite cada código varias veces (nRepeatTransmit, default=10).
-  // El receptor las entrega todas como si fueran códigos nuevos.
-  // Aquí descartamos repeticiones del MISMO código que llegan en ráfaga.
+  // Con setRepeatTransmit(3), el RX reporta el código 1 vez por transmisión.
+  // Si por algún motivo llega un re-reporte del mismo código en <200ms, se descarta.
+  // El siguiente código DIFERENTE de la trama llega a ~286ms (> DEDUPE_MS), así que pasa.
   unsigned long now = millis();
   if (code == _lastValue && (now - _lastCodeMs) < DEDUPE_MS) {
-    // Es una repetición del mismo código dentro de la ventana → ignorar
-    _lastCodeMs = now;  // actualizar timestamp para extender la ventana
+    _lastCodeMs = now;
     return;
   }
   _lastValue = code;
@@ -60,12 +61,10 @@ void RFProtocolRx::handleCode(uint32_t code) {
         _building.type = b2;
         _state = RX_WAIT_HEADER2;
       }
-      // si no es SYNC, se ignora el código (ruido o quedamos desincronizados)
       break;
 
     case RX_WAIT_HEADER2:
       if (b0 > MAX_PAYLOAD) {
-        // longitud inválida: probablemente ruido, se descarta la trama
         _state = RX_WAIT_SYNC;
         break;
       }
@@ -98,6 +97,5 @@ void RFProtocolRx::finalizePacket() {
     _readyPacket = _building;
     _packetReady = true;
   }
-  // si el CRC no coincide, se descarta silenciosamente y se vuelve a esperar SYNC
   _state = RX_WAIT_SYNC;
 }

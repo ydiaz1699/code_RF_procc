@@ -32,14 +32,15 @@ private:
   uint8_t _payloadIdx = 0;
 
   unsigned long _lastCodeMs = 0;
-  static const unsigned long RX_TIMEOUT_MS = 500;  // si se corta una trama a medias, se descarta
+  static const unsigned long RX_TIMEOUT_MS = 1000;  // timeout de trama
 
   // ─── Filtro de repeticiones RCSwitch ───
   uint32_t _lastValue = 0;
-  // Ventana de deduplicación para repeticiones del mismo código.
-  // RCSwitch con nRepeatTransmit=10 y protocolo 1 envía cada código en ~30ms total,
-  // pero entre repeticiones pasan solo ~2-3ms. Usamos 50ms como margen seguro.
-  static const unsigned long DEDUPE_MS = 50;
+  // Con setRepeatTransmit(3) en el TX y delay(150) entre códigos,
+  // el intervalo entre códigos DIFERENTES es ~286ms (medido en Test 5).
+  // DEDUPE_MS=200 filtra re-reportes del mismo código (que llegarían
+  // a <135ms) sin bloquear el siguiente código de la trama (>250ms).
+  static const unsigned long DEDUPE_MS = 200;
 
   bool _packetReady = false;
   Packet _readyPacket{};
